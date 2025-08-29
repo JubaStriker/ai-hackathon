@@ -1,0 +1,20 @@
+{
+  "name": "telegram-automation-bot",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "description": "Telegram bot with daily automation, Gmail send, and Google Calendar booking",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "get-google-tokens": "node scripts/get-google-tokens.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "googleapis": "^133.0.0",
+    "node-cron": "^3.0.3",
+    "nodemailer": "^6.9.13",
+    "telegraf": "^4.16.3"
+  }
+}
