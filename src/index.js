@@ -4,6 +4,7 @@ const { scheduleDaily } = require('./scheduler');
 const { sendMail } = require('./gmail');
 const { createCalendarEvent } = require('./calendar');
 const { runDailyAutomation } = require('./api');
+const { default: axios } = require('axios');
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 if (!BOT_TOKEN) {
@@ -23,6 +24,48 @@ bot.command('schedule_demo', async (ctx) => {
   } catch (err) {
     console.error(err);
     ctx.reply('❌ Demo failed: ' + err.message);
+  }
+});
+
+bot.command('getleads', async (ctx) => {
+  try {
+    // Make the API call
+    const response = await axios.post(
+      'https://api.apollo.io/api/v1/mixed_people/search',
+      {
+        // Put any request body parameters here if needed
+        q_keywords: 'software engineer',
+        page: 1,
+        per_page: 5
+      },
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          'accept': 'application/json',
+          'x-api-key': process.env.APOLLO_API_KEY  // keep key in .env
+        }
+      }
+    );
+
+    // Extract some useful info from response
+    const leads = response.data.people || []; // adjust based on Apollo's response shape
+
+    if (leads.length === 0) {
+      return ctx.reply('No leads found.');
+    }
+
+    // Format results nicely
+    let message = 'Top leads:\n\n';
+    leads.forEach((lead, idx) => {
+      message += `${idx + 1}. ${lead.first_name || ''} ${lead.last_name || ''} - ${lead.organization?.name || 'N/A'}\n`;
+    });
+
+    // Send to Telegram
+    ctx.reply(message);
+
+  } catch (err) {
+    console.error('API Error:', err.message);
+    ctx.reply('Failed to fetch leads: ' + err.message);
   }
 });
 

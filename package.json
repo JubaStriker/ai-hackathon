@@ -10,6 +10,7 @@
     "get-google-tokens": "node scripts/get-google-tokens.js"
   },
   "dependencies": {
+    "axios": "^1.11.0",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "googleapis": "^133.0.0",
