@@ -1,128 +1,131 @@
 require('dotenv').config();
-const { Telegraf } = require('telegraf');
-const { scheduleDaily } = require('./scheduler');
-const { sendMail } = require('./gmail');
-const { createCalendarEvent } = require('./calendar');
-const { runDailyAutomation } = require('./api');
-const { default: axios } = require('axios');
+const TelegramBot = require('node-telegram-bot-api');
+const axios = require('axios');
+const cron = require('node-cron');
+const nodemailer = require('nodemailer');
+const { google } = require('googleapis');
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 if (!BOT_TOKEN) {
-  console.error('Missing TELEGRAM_BOT_TOKEN in .env');
+  console.error('❌ Missing TELEGRAM_BOT_TOKEN in .env');
   process.exit(1);
 }
 
-const bot = new Telegraf(BOT_TOKEN);
+const bot = new TelegramBot(BOT_TOKEN, { polling: true });
+const userStates = {};
 
-// Basic commands
-bot.start((ctx) => ctx.reply('👋 Hi! I am your automation bot. Use /ping or /schedule_demo to test.'));
-bot.command('ping', (ctx) => ctx.reply('pong'));
-bot.command('schedule_demo', async (ctx) => {
-  try {
-    await runFullDailyFlow({ trigger: 'manual', chatId: ctx.chat?.id });
-    ctx.reply('✅ Demo job executed.');
-  } catch (err) {
-    console.error(err);
-    ctx.reply('❌ Demo failed: ' + err.message);
+// ========== Gmail Setup ==========
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: process.env.GMAIL_SENDER,
+    pass: process.env.GMAIL_PASS
   }
 });
 
-bot.command('getleads', async (ctx) => {
+// ========== Google Calendar Setup ==========
+const oAuth2Client = new google.auth.OAuth2(
+  process.env.GCAL_CLIENT_ID,
+  process.env.GCAL_CLIENT_SECRET,
+  process.env.GCAL_REDIRECT_URI
+);
+oAuth2Client.setCredentials({ refresh_token: process.env.GCAL_REFRESH_TOKEN });
+const calendar = google.calendar({ version: 'v3', auth: oAuth2Client });
+
+// ========== Daily Scheduler ==========
+cron.schedule('0 9 * * *', async () => {
+  console.log('⏰ Running daily automation...');
+  await runFullDailyFlow({ trigger: 'schedule' });
+}, { timezone: "Asia/Dhaka" });
+
+// ========== Command: Get Leads ==========
+bot.onText(/\/getleads/, (msg) => {
+  const chatId = msg.chat.id;
+  userStates[chatId] = { step: 'waiting_for_titles' };
+  bot.sendMessage(chatId, 'Please enter job titles separated by commas, e.g., business, product');
+});
+
+// Handle user messages
+bot.on('message', async (msg) => {
+  const chatId = msg.chat.id;
+
+  if (userStates[chatId]?.step === 'waiting_for_titles') {
+    const titles = msg.text.split(',').map(t => t.trim());
+    userStates[chatId] = null;
+
+    bot.sendMessage(chatId, `Searching leads for: ${titles.join(', ')}`);
+    await fetchLeads(chatId, titles);
+  }
+});
+
+// ========== Fetch Leads ==========
+async function fetchLeads(chatId, titles) {
   try {
-    // Make the API call
     const response = await axios.post(
       'https://api.apollo.io/api/v1/mixed_people/search',
-      {
-        // Put any request body parameters here if needed
-        q_keywords: 'software engineer',
-        page: 1,
-        per_page: 5
-      },
-      {
-        headers: {
-          'Content-Type': 'application/json',
-          'accept': 'application/json',
-          'x-api-key': process.env.APOLLO_API_KEY  // keep key in .env
-        }
-      }
+      { person_titles: titles, per_page: 10 },
+      { headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.APOLLO_API_KEY } }
     );
 
-    // Extract some useful info from response
-    const leads = response.data.people || []; // adjust based on Apollo's response shape
+    const leads = response.data.people || [];
+    if (leads.length === 0) return bot.sendMessage(chatId, 'No leads found.');
 
-    if (leads.length === 0) {
-      return ctx.reply('No leads found.');
-    }
-
-    // Format results nicely
-    let message = 'Top leads:\n\n';
-    leads.forEach((lead, idx) => {
-      message += `${idx + 1}. ${lead.first_name || ''} ${lead.last_name || ''} - ${lead.organization?.name || 'N/A'}\n`;
+    let message = 'Top Leads:\n\n';
+    leads.forEach((lead, i) => {
+      message += `${i + 1}. ${lead.first_name || ''} ${lead.last_name || ''} - ${lead.organization?.name || 'N/A'}\n`;
     });
 
-    // Send to Telegram
-    ctx.reply(message);
-
+    bot.sendMessage(chatId, message);
   } catch (err) {
-    console.error('API Error:', err.message);
-    ctx.reply('Failed to fetch leads: ' + err.message);
+    console.error('Apollo API Error:', err.response?.data ?? err.message);
+    bot.sendMessage(chatId, 'Error fetching leads. Check logs for details.');
   }
-});
+}
 
-// Long polling (simple dev setup)
-bot.launch().then(() => console.log('🤖 Bot started (long polling)…')).catch(console.error);
-
-// Graceful stop
-process.once('SIGINT', () => bot.stop('SIGINT'));
-process.once('SIGTERM', () => bot.stop('SIGTERM'));
-
-// Schedule the daily job
-scheduleDaily(async () => {
-  await runFullDailyFlow({ trigger: 'schedule' });
-});
-
+// ========== Daily Automation Flow ==========
 async function runFullDailyFlow({ trigger, chatId }) {
-  // 1) Your business logic (edit src/api.js)
-  const result = await runDailyAutomation();
+  const result = { status: 'success', time: new Date().toLocaleString() };
 
-  // 2) Send an email summary (edit recipient/subject as needed)
+  // 1. Send Email
   try {
-    await sendMail({
-      to: process.env.GMAIL_SENDER, // send to yourself by default
-      subject: `Daily Automation (${new Date().toLocaleString()})`,
+    await transporter.sendMail({
+      from: process.env.GMAIL_SENDER,
+      to: process.env.GMAIL_SENDER,
+      subject: `Daily Automation (${result.time})`,
       text: `Trigger: ${trigger}\nResult: ${JSON.stringify(result, null, 2)}`
     });
     console.log('📧 Email sent');
   } catch (e) {
-    console.error('Email error:', e.message);
+    console.error('Email Error:', e.message);
   }
 
-  // 3) (Optional) Create a Calendar event
+  // 2. Create Calendar Event
   try {
-    const now = new Date();
-    const end = new Date(now.getTime() + 30 * 60 * 1000); // +30 min
-    await createCalendarEvent({
-      summary: 'Daily Automation Check-in',
-      description: 'Scheduled by Telegram bot starter',
-      start: now,
-      end,
-      attendees: [] // e.g., [{ email: 'teammate@example.com' }]
+    const start = new Date();
+    const end = new Date(start.getTime() + 30 * 60 * 1000);
+    await calendar.events.insert({
+      calendarId: 'primary',
+      requestBody: {
+        summary: 'Daily Automation Check-in',
+        description: 'Scheduled by Telegram bot',
+        start: { dateTime: start.toISOString(), timeZone: 'Asia/Dhaka' },
+        end: { dateTime: end.toISOString(), timeZone: 'Asia/Dhaka' }
+      }
     });
     console.log('📅 Calendar event created');
   } catch (e) {
-    console.error('Calendar error:', e.message);
+    console.error('Calendar Error:', e.message);
   }
 
-  // 4) Telegram notify a chat (if provided)
+  // 3. Notify Telegram
   const notifyChatId = chatId || process.env.TELEGRAM_NOTIFY_CHAT_ID;
   if (notifyChatId) {
     try {
-      await bot.telegram.sendMessage(
-        notifyChatId,
-        `Daily job done ✅\nTrigger: ${trigger}\nAt: ${new Date().toLocaleString()}`
-      );
+      await bot.sendMessage(notifyChatId, `Daily job done ✅\nTrigger: ${trigger}\nAt: ${result.time}`);
     } catch (e) {
-      console.error('Telegram notify error:', e.message);
+      console.error('Telegram Notify Error:', e.message);
     }
   }
 }
+
+console.log('🚀 Bot is running...');

@@ -6,7 +6,7 @@
   "description": "Telegram bot with daily automation, Gmail send, and Google Calendar booking",
   "main": "src/index.js",
   "scripts": {
-    "start": "node src/index.js",
+    "start": "nodemon src/index.js",
     "get-google-tokens": "node scripts/get-google-tokens.js"
   },
   "dependencies": {
@@ -15,7 +15,9 @@
     "express": "^4.19.2",
     "googleapis": "^133.0.0",
     "node-cron": "^3.0.3",
+    "node-telegram-bot-api": "^0.66.0",
     "nodemailer": "^6.9.13",
+    "nodemon": "^3.1.10",
     "telegraf": "^4.16.3"
   }
 }
